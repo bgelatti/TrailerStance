@@ -1,0 +1,37 @@
+Trailer Stance
+Copyright (c) 2026 Bruno. All rights reserved.
+
+This repository is public so that players can read the source code and report
+issues. Making the source visible does not make it open source, and no license
+to copy, modify or redistribute it is granted except as stated below.
+
+You MAY:
+  1. Download the official releases published at
+     https://github.com/bgelatti/TrailerStance/releases and use them to play
+     Apocalypter.
+  2. Read the source code and build it for your own personal use.
+  3. Open issues in this repository.
+
+You MAY NOT, without prior written permission from the copyright holder:
+  1. Redistribute, re-upload or mirror this mod or its source code, in whole or
+     in part, on any site or service (for example Nexus Mods, Thunderstore, mod
+     packs, Discord servers or file hosts). Link to the official releases page
+     instead.
+  2. Publish, share or distribute modified versions or derivative works.
+  3. Use any part of the source code in other projects.
+  4. Sell this mod or include it in any paid product or service.
+
+Forks created on GitHub through GitHub's own features are allowed only to the
+extent required by the GitHub Terms of Service; they may not be used to
+distribute the mod or modified versions of it.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Apocalypter, BepInEx, Harmony and NWH Wheel Controller belong to their
+respective owners and are not part of this repository.

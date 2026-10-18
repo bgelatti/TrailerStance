@@ -1,0 +1,61 @@
+name: Bug report
+description: Something does not work as expected.
+labels: [bug]
+body:
+  - type: input
+    id: mod-version
+    attributes:
+      label: Trailer Stance version
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: game-version
+    attributes:
+      label: Apocalypter version
+    validations:
+      required: true
+  - type: input
+    id: bepinex-version
+    attributes:
+      label: BepInEx version
+      placeholder: "5.4.23"
+    validations:
+      required: true
+  - type: dropdown
+    id: trailer
+    attributes:
+      label: Trailer
+      options:
+        - Big
+        - Small
+        - Both
+        - Not trailer specific
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Hitch the Big trailer
+        2. Set width to 1.5x
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: mods
+    attributes:
+      label: Other mods installed
+  - type: textarea
+    id: log
+    attributes:
+      label: LogOutput.log
+      description: Attach or paste `Apocalypter\BepInEx\LogOutput.log` (drag the file here).
