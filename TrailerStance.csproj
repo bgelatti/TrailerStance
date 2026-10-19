@@ -9,6 +9,7 @@
     <Nullable>disable</Nullable>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
 
     <!-- Point this at your Apocalypter install: pass -p:GamePath="...", or set APOCALYPTER_GAME_DIR -->
     <GamePath Condition="'$(GamePath)' == ''">$(APOCALYPTER_GAME_DIR)</GamePath>
