@@ -4,15 +4,16 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>TrailerStance</AssemblyName>
     <RootNamespace>TrailerStance</RootNamespace>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
+    <!-- Version attributes live in src/TrailerStance.cs -->
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
 
-    <!-- Point this at your Apocalypter install: pass -p:GamePath="...", or set APOCALYPTER_GAME_DIR -->
-    <GamePath Condition="'$(GamePath)' == ''">$(APOCALYPTER_GAME_DIR)</GamePath>
+    <!-- Point this at your Apocalypter install, or pass -p:GamePath="..." to dotnet build -->
     <GamePath Condition="'$(GamePath)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Apocalypter</GamePath>
     <ManagedPath>$(GamePath)\Apocalypter_Data\Managed</ManagedPath>
     <BepInExPath>$(GamePath)\BepInEx\core</BepInExPath>
@@ -40,14 +41,10 @@
     <Reference Include="UnityEngine.UIModule"><HintPath>$(ManagedPath)\UnityEngine.UIModule.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
 
-  <Target Name="CheckGamePath" BeforeTargets="ResolveAssemblyReferences">
-    <Error Condition="!Exists('$(ManagedPath)\NWH.WheelController.dll')" Text="Apocalypter not found at '$(GamePath)'. Pass -p:GamePath=&quot;C:\path\to\Apocalypter&quot; or set APOCALYPTER_GAME_DIR." />
-  </Target>
-
   <!-- Optional: copy the built DLL straight into the game's plugins folder -->
   <Target Name="CopyToPlugins" AfterTargets="Build" Condition="'$(CopyToGame)' == 'true'">
     <MakeDir Directories="$(GamePath)\BepInEx\plugins\TrailerStance" />
-    <Copy SourceFiles="$(OutputPath)TrailerStance.dll" DestinationFolder="$(GamePath)\BepInEx\plugins\TrailerStance" />
+    <Copy SourceFiles="$(OutputPath)TrailerStance.dll;assets\icon.png" DestinationFolder="$(GamePath)\BepInEx\plugins\TrailerStance" />
   </Target>
 
 </Project>

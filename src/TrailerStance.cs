@@ -16,6 +16,10 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
+[assembly: System.Reflection.AssemblyVersion("1.1.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.1.0.0")]
+[assembly: System.Reflection.AssemblyTitle("Trailer Stance")]
+
 namespace TrailerStance
 {
     [BepInPlugin(GUID, NAME, VERSION)]
@@ -23,7 +27,7 @@ namespace TrailerStance
     {
         public const string GUID = "local.apocalypter.trailerstance";
         public const string NAME = "Trailer Stance";
-        public const string VERSION = "1.0.0";
+        public const string VERSION = "1.1.0";
 
         internal static ManualLogSource Log;
 
@@ -50,6 +54,7 @@ namespace TrailerStance
             Log = Logger;
 
             Enabled = Config.Bind("General", "Enabled", true, "Apply trailer settings.");
+            Config.Bind("General", "Apocasetter", true, "Show this mod in the Apocasetter Mods menu.");
             NameKeywords = Config.Bind("General", "NameKeywords", "trailer",
                 "Comma separated words; a vehicle whose name contains one of them is treated as a trailer.");
             ExcludeKeywords = Config.Bind("General", "ExcludeKeywords", "hitch",

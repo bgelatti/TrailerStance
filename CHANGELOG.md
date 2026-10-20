@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.0
+- Ready for the Apocasetter in-game Mods window: install and one-click updates straight from GitHub releases.
+- Mod icon (`TrailerStance/icon.png`) and the `General > Apocasetter` toggle.
+- DLL now carries its version number (1.1.0.0).
+
 ## 1.0.0
 - Trailer brakes: the trailer brakes with the car (brake key while rolling forward, never while reversing) and with the handbrake. Strength is a share of each wheel's grip, ramped in smoothly.
 - Brake torque is added right before each wheel's physics step (Harmony prefix on `WheelController.Step`), because the game resets it every step.

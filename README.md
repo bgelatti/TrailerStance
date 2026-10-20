@@ -20,7 +20,10 @@ A BepInEx 5 mod for **Apocalypter** that lets you tune the **Small and Big trail
 
 ## Installation
 
-1. Download `TrailerStance-<version>.zip` from [Releases](https://github.com/bgelatti/TrailerStance/releases).
+**With Apocasetter:** open the in-game Mods window, find Trailer Stance and click install. Updates show up there automatically.
+
+**Manually:**
+1. Download the release zip.
 2. Put the `TrailerStance` folder in `Apocalypter\BepInEx\plugins`.
 3. Start the game. The config file is `BepInEx\config\local.apocalypter.trailerstance.cfg`.
 
@@ -66,17 +69,14 @@ Requires the .NET SDK (6 or newer).
 dotnet build -c Release -p:GamePath="C:\path\to\Apocalypter"
 ```
 
-Instead of `-p:GamePath` you can set the `APOCALYPTER_GAME_DIR` environment variable. Add `-p:CopyToGame=true` to copy the DLL into `BepInEx\plugins\TrailerStance` after building. The game and BepInEx DLLs are referenced from your install and are not included in this repository.
+Add `-p:CopyToGame=true` to copy the DLL and icon into `BepInEx\plugins\TrailerStance` after building.
 
-### Releasing (maintainer)
+### Releasing
 
-Bump `<Version>` in `TrailerStance.csproj`, add a `## <version>` section to `CHANGELOG.md`, commit, then run:
-
-```
-pwsh tools/release.ps1
-```
-
-It builds, packs `release/TrailerStance-<version>.zip` (a `TrailerStance` folder ready for `BepInEx\plugins`), tags `v<version>` and publishes the GitHub release with the changelog section as notes. Use `-DryRun` to only build and pack.
+The Apocasetter index reads GitHub releases. For every release:
+1. Bump `VERSION` and the assembly version in `src/TrailerStance.cs`, `<Version>` in the csproj, and the changelog.
+2. Tag it `vX.Y.Z` (same version as in `[BepInPlugin]`).
+3. Attach `TrailerStance-X.Y.Z.zip` containing `TrailerStance/TrailerStance.dll` and `TrailerStance/icon.png`. The game and BepInEx DLLs are referenced from your install and are not included in this repository.
 
 ## How it works (for modders)
 
