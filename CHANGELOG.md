@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.1.1
+- Plugin GUID and config file renamed to `com.gelatti.apocalypter.trailerstance` (`BepInEx\config\com.gelatti.apocalypter.trailerstance.cfg`). An existing `local.apocalypter.trailerstance.cfg` is moved to the new name on first start, so your settings are kept.
+
 ## 1.1.0
 - Ready for the Apocasetter in-game Mods window: install and one-click updates straight from GitHub releases.
 - Mod icon (`TrailerStance/icon.png`) and the `General > Apocasetter` toggle.

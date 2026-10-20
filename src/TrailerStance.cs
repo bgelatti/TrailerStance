@@ -2,7 +2,7 @@
 // Tunes the Small and Big trailers: wheel spacing, ride height, centre of mass, springs,
 // dampers, anti-bounce, sway damping, and brakes that follow the towing car.
 // Written from scratch; does not use code from other mods.
-// License: MIT (see LICENSE).
+// All rights reserved (see LICENSE).
 
 using System;
 using System.Collections.Generic;
@@ -16,8 +16,8 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
-[assembly: System.Reflection.AssemblyVersion("1.1.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.1.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.1.1.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.1.1.0")]
 [assembly: System.Reflection.AssemblyTitle("Trailer Stance")]
 
 namespace TrailerStance
@@ -25,9 +25,11 @@ namespace TrailerStance
     [BepInPlugin(GUID, NAME, VERSION)]
     public class TrailerStancePlugin : BaseUnityPlugin
     {
-        public const string GUID = "local.apocalypter.trailerstance";
+        public const string GUID = "com.gelatti.apocalypter.trailerstance";
         public const string NAME = "Trailer Stance";
-        public const string VERSION = "1.1.0";
+        public const string VERSION = "1.1.1";
+        // Before 1.1.1 the GUID (and so the config file name) was this
+        private const string OldGUID = "local.apocalypter.trailerstance";
 
         internal static ManualLogSource Log;
 
@@ -52,6 +54,7 @@ namespace TrailerStance
         private void Awake()
         {
             Log = Logger;
+            MigrateOldConfig();
 
             Enabled = Config.Bind("General", "Enabled", true, "Apply trailer settings.");
             Config.Bind("General", "Apocasetter", true, "Show this mod in the Apocasetter Mods menu.");
@@ -95,6 +98,20 @@ namespace TrailerStance
                 Log.LogInfo("Scene ready: " + scene.name);
             };
             Log.LogInfo(NAME + " " + VERSION + " loaded.");
+        }
+
+        // Keeps the settings of players coming from the old GUID's config file.
+        private void MigrateOldConfig()
+        {
+            try
+            {
+                string oldPath = Utility.CombinePaths(Paths.ConfigPath, OldGUID + ".cfg");
+                if (System.IO.File.Exists(Config.ConfigFilePath) || !System.IO.File.Exists(oldPath)) return;
+                System.IO.File.Move(oldPath, Config.ConfigFilePath);
+                Config.Reload();
+                Log.LogInfo("Moved settings from " + OldGUID + ".cfg to " + GUID + ".cfg.");
+            }
+            catch (Exception e) { Log.LogWarning("Could not move the old config file: " + e.Message); }
         }
 
         // The game removes the plugin's own object, so the work runs on a separate object that survives.

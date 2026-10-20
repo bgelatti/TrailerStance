@@ -25,7 +25,7 @@ A BepInEx 5 mod for **Apocalypter** that lets you tune the **Small and Big trail
 **Manually:**
 1. Download the release zip.
 2. Put the `TrailerStance` folder in `Apocalypter\BepInEx\plugins`.
-3. Start the game. The config file is `BepInEx\config\local.apocalypter.trailerstance.cfg`.
+3. Start the game. The config file is `BepInEx\config\com.gelatti.apocalypter.trailerstance.cfg` (an older `local.apocalypter.trailerstance.cfg` is moved there automatically).
 
 ## How to use
 
