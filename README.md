@@ -41,6 +41,8 @@ Look at a trailer and press **Insert**.
 
 All keys can be changed in the config or in Apocasetter (`[Keys]` and `[Brakes]` sections).
 
+To check how much time the mod costs, set `[Debug] PerfLog = true`: every 10 s it writes the average and peak milliseconds to `LogOutput.log`.
+
 ### Suggested settings for dunes and rough ground
 
 | Setting | Value |

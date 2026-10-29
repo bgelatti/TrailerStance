@@ -4,7 +4,7 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>TrailerStance</AssemblyName>
     <RootNamespace>TrailerStance</RootNamespace>
-    <Version>1.1.1</Version>
+    <Version>1.2.0</Version>
     <!-- Version attributes live in src/TrailerStance.cs -->
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <LangVersion>latest</LangVersion>

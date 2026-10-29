@@ -6,6 +6,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Text;
 using BepInEx;
 using BepInEx.Configuration;
@@ -16,8 +17,8 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
-[assembly: System.Reflection.AssemblyVersion("1.1.1.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.1.1.0")]
+[assembly: System.Reflection.AssemblyVersion("1.2.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.2.0.0")]
 [assembly: System.Reflection.AssemblyTitle("Trailer Stance")]
 
 namespace TrailerStance
@@ -27,7 +28,7 @@ namespace TrailerStance
     {
         public const string GUID = "com.gelatti.apocalypter.trailerstance";
         public const string NAME = "Trailer Stance";
-        public const string VERSION = "1.1.1";
+        public const string VERSION = "1.2.0";
         // Before 1.1.1 the GUID (and so the config file name) was this
         private const string OldGUID = "local.apocalypter.trailerstance";
 
@@ -40,6 +41,7 @@ namespace TrailerStance
         internal ConfigEntry<bool> BrakesOn;
         internal ConfigEntry<float> AimDistance;
         internal static ConfigEntry<bool> StretchAxles;
+        internal ConfigEntry<bool> PerfLog;
 
         internal TrailerSettings Big;
         internal TrailerSettings Small;
@@ -47,6 +49,12 @@ namespace TrailerStance
         private readonly Dictionary<int, TrailerState> _trailers = new Dictionary<int, TrailerState>();
         private readonly HashSet<string> _dumped = new HashSet<string>();
         private float _nextScan;
+        private const float ScanInterval = 5f;
+        // wheels are only re-checked for changes made by the game this often; setting changes apply at once
+        private float _nextCheck;
+        private const float CheckInterval = 0.25f;
+        // bumped by every config change, so targets are only recalculated when something changed
+        private int _settingsVersion;
         private TrailerState _editing;
         private string _toast;
         private float _toastUntil;
@@ -78,9 +86,13 @@ namespace TrailerStance
 
             StretchAxles = Config.Bind("General", "StretchAxles", true,
                 "Stretch the trailer's axle model sideways together with the wheels when Width is changed.");
+            PerfLog = Config.Bind("Debug", "PerfLog", false,
+                "Every 10 s, write how long this mod takes per frame (average and peak, in ms) to LogOutput.log.");
 
             Big = new TrailerSettings(Config, "BigTrailer");
             Small = new TrailerSettings(Config, "SmallTrailer");
+            Config.SettingChanged += (sender, e) => _settingsVersion++;
+            Config.ConfigReloaded += (sender, e) => _settingsVersion++;
 
             CreateRunner();
             Application.onBeforeRender += () => Tick("render");
@@ -95,6 +107,7 @@ namespace TrailerStance
             SceneManager.sceneLoaded += (scene, mode) =>
             {
                 _trailers.Clear(); _editing = null; _scanLogged = false;
+                _nextScan = 0f; // scan on the next frame
                 Log.LogInfo("Scene ready: " + scene.name);
             };
             Log.LogInfo(NAME + " " + VERSION + " loaded.");
@@ -138,6 +151,7 @@ namespace TrailerStance
             if (Time.frameCount == _lastTickFrame) return;
             _lastTickFrame = Time.frameCount;
             if (!_tickLogged) { _tickLogged = true; Log.LogInfo("Ticking (" + source + ")."); }
+            long start = Perf.Start(PerfLog.Value);
             try
             {
                 DoUpdate();
@@ -150,6 +164,8 @@ namespace TrailerStance
             {
                 if (_tickErrors++ < 5) Log.LogError("Tick: " + e);
             }
+            Perf.Tick.Stop(start);
+            if (start != 0) WritePerfLog();
         }
         private int _tickErrors;
 
@@ -159,15 +175,45 @@ namespace TrailerStance
 
             if (Time.unscaledTime >= _nextScan)
             {
-                _nextScan = Time.unscaledTime + 2f;
+                _nextScan = Time.unscaledTime + ScanInterval;
                 Scan();
             }
 
             HandleEditing();
 
             if (!Enabled.Value) return;
+            bool check = Time.unscaledTime >= _nextCheck;
+            if (check) _nextCheck = Time.unscaledTime + CheckInterval;
             foreach (var t in _trailers.Values)
-                if (t.Rb != null) t.ApplyWheels(SettingsFor(t));
+            {
+                if (t.Rb == null) continue;
+                if (!check && !t.Dirty && t.AppliedVersion == _settingsVersion) continue;
+                t.ApplyWheels(SettingsFor(t));
+                t.AppliedVersion = _settingsVersion;
+                t.Dirty = false;
+            }
+        }
+
+        // ---- PerfLog
+        private float _nextPerfLog;
+        private int _perfGc;
+
+        private void WritePerfLog()
+        {
+            if (Time.unscaledTime < _nextPerfLog) return;
+            bool first = _nextPerfLog == 0f;
+            _nextPerfLog = Time.unscaledTime + 10f;
+            int gc = GC.CollectionCount(0);
+            if (!first)
+            {
+                int wheels = 0;
+                foreach (var t in _trailers.Values) wheels += t.Wheels.Count;
+                Log.LogInfo("Perf (10 s): tick " + Perf.Tick.Text() + ", fixed " + Perf.Fixed.Text() + ", scan " + Perf.Scan.Text() +
+                            ", car search " + Perf.CarSearch.Text() + "; " + _trailers.Count + " trailer(s), " + wheels + " wheel(s), " +
+                            _rootCount + " root objects; game GC runs " + (gc - _perfGc) + ".");
+            }
+            _perfGc = gc;
+            Perf.ResetAll();
         }
 
         internal void DoFixedUpdate()
@@ -184,81 +230,117 @@ namespace TrailerStance
 
         // ---------------------------------------------------------------- discovery
 
+        // keyword lists, split again only when the setting text changes
+        private string _includeSrc, _excludeSrc;
+        private string[] _include = new string[0], _exclude = new string[0];
+
+        private static string[] SplitKeywords(string raw)
+        {
+            var list = new List<string>();
+            foreach (var part in (raw ?? "").Split(','))
+            {
+                string k = part.Trim().ToLowerInvariant();
+                if (k.Length > 0) list.Add(k);
+            }
+            return list.ToArray();
+        }
+
         private bool NameMatches(string name)
         {
-            string n = name.ToLowerInvariant();
-            foreach (var raw in ExcludeKeywords.Value.Split(','))
-            {
-                string k = raw.Trim().ToLowerInvariant();
-                if (k.Length > 0 && n.Contains(k)) return false;
-            }
-            foreach (var raw in NameKeywords.Value.Split(','))
-            {
-                string k = raw.Trim().ToLowerInvariant();
-                if (k.Length > 0 && n.Contains(k)) return true;
-            }
+            if (name == null) return false;
+            if (!string.Equals(_excludeSrc, ExcludeKeywords.Value)) { _excludeSrc = ExcludeKeywords.Value; _exclude = SplitKeywords(_excludeSrc); }
+            if (!string.Equals(_includeSrc, NameKeywords.Value)) { _includeSrc = NameKeywords.Value; _include = SplitKeywords(_includeSrc); }
+            for (int i = 0; i < _exclude.Length; i++)
+                if (name.IndexOf(_exclude[i], StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            for (int i = 0; i < _include.Length; i++)
+                if (name.IndexOf(_include[i], StringComparison.OrdinalIgnoreCase) >= 0) return true;
             return false;
         }
 
+        private readonly List<int> _dead = new List<int>();
+        private readonly List<GameObject> _roots = new List<GameObject>();
+        private readonly List<Rigidbody> _bodies = new List<Rigidbody>();
+        private int _rootCount;
+
         private void Scan()
         {
+            long start = Perf.Start(PerfLog.Value);
+
             // drop destroyed trailers
-            var dead = new List<int>();
-            foreach (var kv in _trailers) if (kv.Value.Rb == null) dead.Add(kv.Key);
-            foreach (var id in dead) _trailers.Remove(id);
+            _dead.Clear();
+            foreach (var kv in _trailers) if (kv.Value.Rb == null) _dead.Add(kv.Key);
+            for (int i = 0; i < _dead.Count; i++) _trailers.Remove(_dead[i]);
             if (_editing != null && _editing.Rb == null) _editing = null;
 
-            Rigidbody[] all;
-            try { all = FindObjectsOfType<Rigidbody>(); }
-            catch { return; }
-
-            // a trailer is the top object whose name matches; its body is that object's rigidbody,
-            // or the heaviest non-wheel rigidbody inside it
-            var best = new Dictionary<int, Rigidbody>();
-            var roots = new Dictionary<int, Transform>();
-            foreach (var rb in all)
+            // a trailer is a scene root object whose name matches (Trailer_Big(Clone)NN, Trailer_Small(Clone)NN)
+            _rootCount = 0;
+            for (int s = 0; s < SceneManager.sceneCount; s++)
             {
-                if (rb == null) continue;
-                Transform root = null;
-                for (var t = rb.transform; t != null; t = t.parent)
-                    if (NameMatches(t.name)) root = t; // keep the topmost match
-                if (root == null) continue;
-                int rid = root.GetInstanceID();
-                Rigidbody cur;
-                bool own = rb.transform == root;
-                bool wheel = rb.name.ToLowerInvariant().Contains("wheel");
-                if (!best.TryGetValue(rid, out cur)) { if (own || !wheel) { best[rid] = rb; roots[rid] = root; } continue; }
-                if (cur.transform == root) continue;
-                if (own || (!wheel && rb.mass > cur.mass)) best[rid] = rb;
-            }
+                var scene = SceneManager.GetSceneAt(s);
+                if (!scene.isLoaded) continue;
+                scene.GetRootGameObjects(_roots);
+                _rootCount += _roots.Count;
+                for (int i = 0; i < _roots.Count; i++)
+                {
+                    var go = _roots[i];
+                    if (go == null || !go.activeInHierarchy) continue;
+                    var root = go.transform;
+                    int rid = root.GetInstanceID();
+                    if (_trailers.ContainsKey(rid) || !NameMatches(go.name)) continue;
+                    var rb = TrailerBody(root);
+                    if (rb == null) continue;
 
-            foreach (var kv in best)
-            {
-                var rb = kv.Value; var root = roots[kv.Key];
-                if (_trailers.ContainsKey(kv.Key)) continue;
-                var state = new TrailerState(rb, root);
-                _trailers[kv.Key] = state;
-                Log.LogInfo("Found trailer '" + root.name + "' (" + (state.IsSmall ? "small" : "big") + "), body '" + rb.name + "': " +
-                            state.Wheels.Count + " wheels, " + state.Axles.Count + " axle model(s), mass " + rb.mass.ToString("0"));
-                if (_dumped.Add(state.IsSmall ? "small" : "big")) Log.LogInfo(Describe(rb, root));
+                    var state = new TrailerState(rb, root);
+                    _trailers[rid] = state;
+                    Log.LogInfo("Found trailer '" + root.name + "' (" + (state.IsSmall ? "small" : "big") + "), body '" + rb.name + "': " +
+                                state.Wheels.Count + " wheels, " + state.Axles.Count + " axle model(s), mass " + rb.mass.ToString("0"));
+                    if (_dumped.Add(state.IsSmall ? "small" : "big")) Log.LogInfo(Describe(rb, root));
+                }
             }
+            _roots.Clear();
 
             if (!_scanLogged && SceneManager.GetActiveScene().name != "MainMenu")
             {
                 _scanLogged = true;
-                Log.LogInfo("Scan: " + all.Length + " bodies in the world, " + _trailers.Count + " trailer(s).");
+                Log.LogInfo("Scan: " + _rootCount + " root objects in " + SceneManager.sceneCount + " scene(s), " + _trailers.Count + " trailer(s).");
             }
 
             foreach (var t in _trailers.Values) t.RefreshWheels();
+            Perf.Scan.Stop(start);
         }
+
+        // the trailer's body: the root's own rigidbody, or the heaviest non-wheel rigidbody inside it
+        private Rigidbody TrailerBody(Transform root)
+        {
+            var own = root.GetComponent<Rigidbody>();
+            if (own != null) return own;
+            root.GetComponentsInChildren(false, _bodies);
+            Rigidbody best = null;
+            for (int i = 0; i < _bodies.Count; i++)
+            {
+                var rb = _bodies[i];
+                if (rb == null || rb.name.IndexOf("wheel", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                if (best == null || rb.mass > best.mass) best = rb;
+            }
+            _bodies.Clear();
+            return best;
+        }
+
+        private Camera[] _cameras = new Camera[8];
 
         private Camera GetCamera()
         {
             var cam = Camera.main;
             if (cam != null && cam.isActiveAndEnabled) return cam;
+            if (_cameras.Length < Camera.allCamerasCount) _cameras = new Camera[Camera.allCamerasCount + 4];
+            int n = Camera.GetAllCameras(_cameras);
             Camera best = null;
-            foreach (var c in Camera.allCameras)
-                if (c.isActiveAndEnabled && (best == null || c.depth > best.depth)) best = c;
+            for (int i = 0; i < n; i++)
+            {
+                var c = _cameras[i];
+                if (c != null && c.isActiveAndEnabled && (best == null || c.depth > best.depth)) best = c;
+                _cameras[i] = null;
+            }
             return best;
         }
 
@@ -378,42 +460,64 @@ namespace TrailerStance
         private Text _hudText;
         private Font _font;
 
+        // the panel text is rebuilt on a change, and a few times a second for the live values
+        private string _panelText;
+        private TrailerState _panelFor;
+        private int _panelSelected = -1, _panelVersion = -1;
+        private float _panelNext;
+
         private void UpdateHud()
         {
             string text = null;
             if (_editing != null && _editing.Rb != null)
             {
-                var s = SettingsFor(_editing);
-                string[] rows = {
-                    "Width          " + s.Width.Value.ToString("0.00") + "x",
-                    "Ride height    " + Signed(s.Height.Value) + " m",
-                    "Centre of mass " + Signed(s.CenterOfMass.Value) + " m   (" + ComHeightText() + ")",
-                    "Spring         " + s.Spring.Value.ToString("0.0") + "x",
-                    "Damper         " + s.Damper.Value.ToString("0.0") + "x",
-                    "Anti-bounce    " + (s.AntiBounce.Value <= 0f ? "off" : s.AntiBounce.Value.ToString("0.00")),
-                    "Sway damping   +" + s.SwayDamping.Value.ToString("0.0"),
-                    "Brakes         " + (s.BrakeStrength.Value <= 0f ? "off" : s.BrakeStrength.Value.ToString("0.00")) +
-                        (_editing.Car != null ? "   (car: " + _editing.Car.name + ")" : "   (no car found)") };
-                var sb = new StringBuilder();
-                sb.AppendLine("TRAILER STANCE - " + _editing.Root.name + (_editing.IsSmall ? " (small)" : " (big)"));
-                for (int i = 0; i < rows.Length; i++) sb.AppendLine((i == _selected ? "> " : "  ") + rows[i]);
-                sb.AppendLine(PrevKey.Value + "/" + NextKey.Value + " select   " + DecKey.Value + "/" + IncKey.Value + " change   hold " + FastKey.Value + " = 5x");
-                sb.AppendLine(ResetKey.Value + " reset   " + EditKey.Value + " done   (" + _editing.Wheels.Count + " wheels, " + _editing.Axles.Count + " axle models)");
-                sb.AppendLine("Pink ball = centre of mass, line = down to the ground. Lower ball = harder to roll over.");
-                sb.AppendLine(SuspensionInfo(_editing));
-                text = sb.ToString();
+                if (_panelText == null || _panelFor != _editing || _panelSelected != _selected ||
+                    _panelVersion != _settingsVersion || Time.unscaledTime >= _panelNext)
+                {
+                    _panelFor = _editing; _panelSelected = _selected; _panelVersion = _settingsVersion;
+                    _panelNext = Time.unscaledTime + 0.2f;
+                    _panelText = PanelText();
+                }
+                text = _panelText;
             }
             else if (_toast != null && Time.unscaledTime < _toastUntil) text = _toast;
 
             if (text == null) { if (_hudGo != null && _hudGo.activeSelf) _hudGo.SetActive(false); return; }
             if (_hudGo == null) BuildHud();
             if (!_hudGo.activeSelf) _hudGo.SetActive(true);
-            if (_hudText.text != text) _hudText.text = text;
+            if (!ReferenceEquals(_hudText.text, text) && _hudText.text != text) _hudText.text = text;
+        }
+
+        private string PanelText()
+        {
+            var s = SettingsFor(_editing);
+            string[] rows = {
+                "Width          " + s.Width.Value.ToString("0.00") + "x",
+                "Ride height    " + Signed(s.Height.Value) + " m",
+                "Centre of mass " + Signed(s.CenterOfMass.Value) + " m   (" + ComHeightText() + ")",
+                "Spring         " + s.Spring.Value.ToString("0.0") + "x",
+                "Damper         " + s.Damper.Value.ToString("0.0") + "x",
+                "Anti-bounce    " + (s.AntiBounce.Value <= 0f ? "off" : s.AntiBounce.Value.ToString("0.00")),
+                "Sway damping   +" + s.SwayDamping.Value.ToString("0.0"),
+                "Brakes         " + (s.BrakeStrength.Value <= 0f ? "off" : s.BrakeStrength.Value.ToString("0.00")) +
+                    (_editing.Car != null ? "   (car: " + _editing.Car.name + ")" : "   (no car found)") };
+            var sb = new StringBuilder();
+            sb.AppendLine("TRAILER STANCE - " + _editing.Root.name + (_editing.IsSmall ? " (small)" : " (big)"));
+            for (int i = 0; i < rows.Length; i++) sb.AppendLine((i == _selected ? "> " : "  ") + rows[i]);
+            sb.AppendLine(PrevKey.Value + "/" + NextKey.Value + " select   " + DecKey.Value + "/" + IncKey.Value + " change   hold " + FastKey.Value + " = 5x");
+            sb.AppendLine(ResetKey.Value + " reset   " + EditKey.Value + " done   (" + _editing.Wheels.Count + " wheels, " + _editing.Axles.Count + " axle models)");
+            sb.AppendLine("Pink ball = centre of mass, line = down to the ground. Lower ball = harder to roll over.");
+            sb.AppendLine(SuspensionInfo(_editing));
+            return sb.ToString();
         }
 
         // ---- trailer brakes
         private float _nextCarSearch;
         private bool _brakeLogged;
+        private const float TowRange = 12f;
+        private readonly Collider[] _overlap = new Collider[512];
+        private readonly List<Joint> _joints = new List<Joint>();
+        private readonly HashSet<int> _seenBodies = new HashSet<int>();
 
         private void UpdateBrakes()
         {
@@ -427,7 +531,12 @@ namespace TrailerStance
             foreach (var t in _trailers.Values)
             {
                 if (t.Rb == null) continue;
-                if (searchCars) t.Car = FindTowingCar(t);
+                if (searchCars && !StillTowing(t))
+                {
+                    long start = Perf.Start(PerfLog.Value);
+                    t.Car = FindTowingCar(t);
+                    Perf.CarSearch.Stop(start);
+                }
 
                 float target = 0f;
                 if (BrakesOn.Value && t.Car != null)
@@ -452,24 +561,100 @@ namespace TrailerStance
             }
         }
 
-        // the car this trailer hangs on: the nearest other wheeled body close to it
+        // the car found last time still holds the trailer: same hitch joint, or (found by distance) still close
+        private bool StillTowing(TrailerState t)
+        {
+            if (t.Car == null) return false;
+            if (t.CarByJoint) return t.CarJoint != null && t.CarJoint.connectedBody == t.CarJointBody;
+            return Vector3.Distance(t.Car.worldCenterOfMass, t.Rb.worldCenterOfMass) < TowRange;
+        }
+
+        // the car this trailer hangs on: the body at the other end of the hitch joint, or else
+        // the nearest other wheeled body close to it
         private Rigidbody FindTowingCar(TrailerState t)
         {
-            Rigidbody best = null;
-            float bestD = 12f;
-            var seen = new HashSet<int>();
-            foreach (var wc in FindObjectsOfType<WheelController>())
+            t.CarByJoint = false; t.CarJoint = null; t.CarJointBody = null;
+
+            // a joint on the trailer that holds another body
+            t.Root.GetComponentsInChildren(false, _joints);
+            for (int i = 0; i < _joints.Count; i++)
             {
-                if (wc == null || wc.transform.IsChildOf(t.Root)) continue;
-                Rigidbody rb = null;
-                for (var x = wc.transform; x != null; x = x.parent) { var r = x.GetComponent<Rigidbody>(); if (r != null) rb = r; }
-                if (rb == null || !seen.Add(rb.GetInstanceID())) continue;
-                foreach (var other in _trailers.Values) if (other.Rb == rb) { rb = null; break; }
-                if (rb == null) continue;
-                float d = Vector3.Distance(rb.worldCenterOfMass, t.Rb.worldCenterOfMass);
-                if (d < bestD) { bestD = d; best = rb; }
+                var j = _joints[i];
+                var other = j != null ? j.connectedBody : null;
+                if (other == null || other.transform.IsChildOf(t.Root)) continue;
+                var car = CarOf(other, t);
+                if (car == null) continue;
+                _joints.Clear();
+                return LinkCar(t, j, other, car);
             }
+            _joints.Clear();
+
+            // a joint on a nearby body that holds the trailer, else the nearest wheeled body
+            Vector3 c = t.Rb.worldCenterOfMass;
+            int n = Physics.OverlapSphereNonAlloc(c, TowRange, _overlap, ~0, QueryTriggerInteraction.Ignore);
+            Rigidbody best = null, linked = null;
+            Joint linkJoint = null;
+            float bestD = TowRange;
+            _seenBodies.Clear();
+            for (int i = 0; i < n; i++)
+            {
+                var col = _overlap[i];
+                _overlap[i] = null;
+                if (linked != null) continue;
+                var body = col != null ? col.attachedRigidbody : null;
+                if (body == null || !_seenBodies.Add(body.GetInstanceID()) || body.transform.IsChildOf(t.Root)) continue;
+
+                body.GetComponents(_joints);
+                for (int k = 0; k < _joints.Count; k++)
+                {
+                    var j = _joints[k];
+                    var held = j != null ? j.connectedBody : null;
+                    if (held == null || !held.transform.IsChildOf(t.Root)) continue;
+                    linked = CarOf(body, t);
+                    if (linked != null) { linkJoint = j; break; }
+                }
+                _joints.Clear();
+                if (linked != null) continue;
+
+                var top = TopBody(body);
+                if (top == best) continue;
+                float d = Vector3.Distance(top.worldCenterOfMass, c);
+                if (d < bestD && IsCar(top, t)) { bestD = d; best = top; }
+            }
+            if (linked != null) return LinkCar(t, linkJoint, linkJoint.connectedBody, linked);
             return best;
+        }
+
+        private static Rigidbody LinkCar(TrailerState t, Joint joint, Rigidbody connected, Rigidbody car)
+        {
+            t.CarByJoint = true; t.CarJoint = joint; t.CarJointBody = connected;
+            return car;
+        }
+
+        // topmost rigidbody above (or at) this one: the vehicle's main body
+        private static Rigidbody TopBody(Rigidbody rb)
+        {
+            var top = rb;
+            for (var x = rb.transform.parent; x != null; x = x.parent)
+            {
+                var r = x.GetComponent<Rigidbody>();
+                if (r != null) top = r;
+            }
+            return top;
+        }
+
+        private Rigidbody CarOf(Rigidbody rb, TrailerState t)
+        {
+            var top = TopBody(rb);
+            return IsCar(top, t) ? top : null;
+        }
+
+        // a wheeled body that is not this trailer or another trailer
+        private bool IsCar(Rigidbody rb, TrailerState t)
+        {
+            if (rb == null || rb.transform.IsChildOf(t.Root)) return false;
+            foreach (var other in _trailers.Values) if (other.Rb == rb) return false;
+            return rb.GetComponentInChildren<WheelController>() != null;
         }
 
         // ---- centre of mass marker
@@ -765,17 +950,49 @@ namespace TrailerStance
             if (!_ticked) { _ticked = true; TrailerStancePlugin.Log.LogInfo("Runner ticking."); }
             Plugin.Tick("runner");
         }
-        private void FixedUpdate() { if (Plugin != null) Guard("FixedUpdate", Plugin.DoFixedUpdate); }
-        private void OnDestroy() { TrailerStancePlugin.Log.LogWarning("Runner destroyed."); }
-
-        // Unity errors are not written to this game's log, so catch and write them ourselves (first few only)
-        private void Guard(string where, Action a)
+        private void FixedUpdate()
         {
-            try { a(); }
+            if (Plugin == null) return;
+            long start = Perf.Start(Plugin.PerfLog.Value);
+            // Unity errors are not written to this game's log, so catch and write them ourselves (first few only)
+            try { Plugin.DoFixedUpdate(); }
             catch (Exception e)
             {
-                if (_errors++ < 5) TrailerStancePlugin.Log.LogError(where + ": " + e);
+                if (_errors++ < 5) TrailerStancePlugin.Log.LogError("FixedUpdate: " + e);
             }
+            Perf.Fixed.Stop(start);
+        }
+        private void OnDestroy() { TrailerStancePlugin.Log.LogWarning("Runner destroyed."); }
+    }
+
+    // Timings for the PerfLog option. Start returns 0 when it is off, and Stop then does nothing.
+    internal class Perf
+    {
+        public static readonly Perf Tick = new Perf(), Fixed = new Perf(), Scan = new Perf(), CarSearch = new Perf();
+        private long _sum, _max;
+        private int _count;
+
+        public static long Start(bool on) { return on ? Math.Max(1L, Stopwatch.GetTimestamp()) : 0L; }
+
+        public void Stop(long start)
+        {
+            if (start == 0) return;
+            long d = Stopwatch.GetTimestamp() - start;
+            _sum += d; _count++;
+            if (d > _max) _max = d;
+        }
+
+        private static string Ms(double ticks) { return (ticks * 1000.0 / Stopwatch.Frequency).ToString("0.000"); }
+
+        public string Text()
+        {
+            if (_count == 0) return "-";
+            return "avg " + Ms((double)_sum / _count) + " ms / peak " + Ms(_max) + " ms (" + _count + "x)";
+        }
+
+        public static void ResetAll()
+        {
+            foreach (var p in new[] { Tick, Fixed, Scan, CarSearch }) { p._sum = 0; p._max = 0; p._count = 0; }
         }
     }
 
@@ -849,15 +1066,24 @@ namespace TrailerStance
             if (Wc != null) { if (Wc.spring != null) Wc.spring.maxForce = v; return; }
             if (Col != null) { var js = Col.suspensionSpring; js.spring = v; Col.suspensionSpring = js; }
         }
-        public float[] GetDamp()
+        // damper values: 6 for an NWH wheel (two rates, four slow/fast multipliers), 1 for a WheelCollider
+        public const int MaxDamp = 6;
+        public readonly float[] BaseDamp = new float[MaxDamp], LastDamp = new float[MaxDamp];
+        public readonly float[] CurDamp = new float[MaxDamp], TargetDamp = new float[MaxDamp];
+        public int DampLen; // 0 = no damper seen yet
+
+        // reads the damper values into buf, returns how many (0 = no damper)
+        public int ReadDamp(float[] buf)
         {
             if (Wc != null && Wc.damper != null)
             {
                 var d = Wc.damper;
-                return new[] { d.bumpRate, d.reboundRate, d.slowBump, d.fastBump, d.slowRebound, d.fastRebound };
+                buf[0] = d.bumpRate; buf[1] = d.reboundRate; buf[2] = d.slowBump;
+                buf[3] = d.fastBump; buf[4] = d.slowRebound; buf[5] = d.fastRebound;
+                return 6;
             }
-            if (Col != null) return new[] { Col.suspensionSpring.damper };
-            return null;
+            if (Col != null) { buf[0] = Col.suspensionSpring.damper; return 1; }
+            return 0;
         }
         public void SetDamp(float[] v)
         {
@@ -886,15 +1112,17 @@ namespace TrailerStance
 
         // NWH damper: force = rate x (slow or fast multiplier) x speed. Only the two rates are scaled;
         // the four multipliers are shapes, not strengths, and stay as the game set them.
-        public float[] TargetDamp(float mult, float antiBounce, float sprungMass)
+        // writes the wanted damper values into TargetDamp
+        public void CalcTargetDamp(float mult, float antiBounce, float sprungMass)
         {
             var b = BaseDamp;
-            var d = (float[])b.Clone();
+            var d = TargetDamp;
+            Array.Copy(b, d, DampLen);
             float crit = CriticalDamping(sprungMass);
             // largest coefficient the physics step can take without blowing up (half the stability limit)
             float cap = Mathf.Max(1f, sprungMass) / Mathf.Max(0.002f, Time.fixedDeltaTime);
 
-            if (d.Length >= 6)
+            if (DampLen >= 6)
             {
                 float slowB = Mathf.Max(0.05f, b[2]), fastB = Mathf.Max(0.05f, b[3]);
                 float slowR = Mathf.Max(0.05f, b[4]), fastR = Mathf.Max(0.05f, b[5]);
@@ -908,20 +1136,20 @@ namespace TrailerStance
                 d[0] = Mathf.Min(d[0], Mathf.Max(b[0], cap / Mathf.Max(slowB, fastB)));
                 d[1] = Mathf.Min(d[1], Mathf.Max(b[1], cap / Mathf.Max(slowR, fastR)));
             }
-            else if (d.Length == 1)
+            else if (DampLen == 1)
             {
                 d[0] = Mathf.Max(b[0] * mult, antiBounce * crit);
                 d[0] = Mathf.Min(d[0], Mathf.Max(b[0], cap));
             }
-            return d;
         }
 
         // damping actually felt over a bump (fast range), N per m/s
         public float EffectiveDamping()
         {
-            var d = GetDamp();
-            if (d == null || d.Length == 0) return 0f;
-            if (d.Length >= 6) return d[0] * d[3];
+            var d = CurDamp;
+            int n = ReadDamp(d);
+            if (n == 0) return 0f;
+            if (n >= 6) return d[0] * d[3];
             return d[0];
         }
 
@@ -941,7 +1169,6 @@ namespace TrailerStance
         public Vector3 BaseLocal;      // stock transform.localPosition
         public Vector3 LastLocal;      // localPosition we last wrote (or saw)
         public float BaseMaxForce, LastMaxForce;
-        public float[] BaseDamp, LastDamp;
     }
 
     internal class AxleState
@@ -960,11 +1187,22 @@ namespace TrailerStance
         public readonly Rigidbody Rb;
         public readonly Transform Root;
         public Rigidbody Car;
+        // how the car was found: through this joint (still valid while it holds CarJointBody), or by distance
+        public bool CarByJoint;
+        public Joint CarJoint;
+        public Rigidbody CarJointBody;
         public float BrakeLevel;
         public readonly bool IsSmall;
         public readonly List<WheelState> Wheels = new List<WheelState>();
+        // wheels need applying on the next frame (new or lost wheels), and the settings version last applied
+        public bool Dirty = true;
+        public int AppliedVersion = -1;
         private Vector3 _baseCoM, _lastCoM;
         private bool _comInit;
+
+        // shared buffers for GetComponentsInChildren (main thread only)
+        private static readonly List<WheelController> _wcBuf = new List<WheelController>();
+        private static readonly List<WheelCollider> _colBuf = new List<WheelCollider>();
 
         public TrailerState(Rigidbody rb, Transform root)
         {
@@ -977,12 +1215,31 @@ namespace TrailerStance
         public void RefreshWheels()
         {
             if (Rb == null || Root == null) return;
-            Wheels.RemoveAll(w => !w.Alive);
-            foreach (var wc in Root.GetComponentsInChildren<WheelController>(true))
-                if (!Wheels.Exists(w => w.Wc == wc)) AddWheel(new WheelState { Wc = wc });
-            foreach (var col in Root.GetComponentsInChildren<WheelCollider>(true))
-                if (!Wheels.Exists(w => w.Col == col)) AddWheel(new WheelState { Col = col });
+            int before = Wheels.Count;
+            for (int i = Wheels.Count - 1; i >= 0; i--) if (!Wheels[i].Alive) Wheels.RemoveAt(i);
+            bool changed = Wheels.Count != before;
+
+            Root.GetComponentsInChildren(true, _wcBuf);
+            for (int i = 0; i < _wcBuf.Count; i++)
+                if (!HasWheel(_wcBuf[i], null)) { AddWheel(new WheelState { Wc = _wcBuf[i] }); changed = true; }
+            _wcBuf.Clear();
+            Root.GetComponentsInChildren(true, _colBuf);
+            for (int i = 0; i < _colBuf.Count; i++)
+                if (!HasWheel(null, _colBuf[i])) { AddWheel(new WheelState { Col = _colBuf[i] }); changed = true; }
+            _colBuf.Clear();
+
+            if (changed) Dirty = true;
             if (Wheels.Count != _axleWheelCount) FindAxles();
+        }
+
+        private bool HasWheel(WheelController wc, WheelCollider col)
+        {
+            for (int i = 0; i < Wheels.Count; i++)
+            {
+                var w = Wheels[i];
+                if (wc != null ? ReferenceEquals(w.Wc, wc) : ReferenceEquals(w.Col, col)) return true;
+            }
+            return false;
         }
 
         private void AddWheel(WheelState ws)
@@ -990,7 +1247,8 @@ namespace TrailerStance
             ws.BaseLocal = ws.LastLocal = ws.T.localPosition;
             ws.BaseRb = Rb.transform.InverseTransformPoint(ws.T.position);
             ws.BaseMaxForce = ws.LastMaxForce = ws.GetSpring();
-            ws.BaseDamp = ws.LastDamp = ws.GetDamp();
+            ws.DampLen = ws.ReadDamp(ws.BaseDamp);
+            Array.Copy(ws.BaseDamp, ws.LastDamp, ws.DampLen);
             Wheels.Add(ws);
         }
 
@@ -1123,13 +1381,13 @@ namespace TrailerStance
             }
         }
 
-        private static bool Same(float[] a, float[] b)
+        private static bool Same(float[] a, float[] b, int len)
         {
-            if (a == null || b == null || a.Length != b.Length) return false;
-            for (int i = 0; i < a.Length; i++) if (Mathf.Abs(a[i] - b[i]) > 0.001f + Mathf.Abs(b[i]) * 1e-4f) return false;
+            for (int i = 0; i < len; i++) if (Mathf.Abs(a[i] - b[i]) > 0.001f + Mathf.Abs(b[i]) * 1e-4f) return false;
             return true;
         }
 
+        // Runs on a setting change, for new wheels, and every CheckInterval otherwise; allocates nothing.
         public void ApplyWheels(TrailerSettings s)
         {
             if (Wheels.Count == 0) return;
@@ -1146,8 +1404,13 @@ namespace TrailerStance
                 }
                 float f = w.GetSpring();
                 if (Mathf.Abs(f - w.LastMaxForce) > 0.01f) w.BaseMaxForce = w.LastMaxForce = f;
-                var d = w.GetDamp();
-                if (d != null && (w.LastDamp == null || !Same(d, w.LastDamp))) { w.BaseDamp = d; w.LastDamp = d; }
+                int len = w.ReadDamp(w.CurDamp);
+                if (len > 0 && (len != w.DampLen || !Same(w.CurDamp, w.LastDamp, len)))
+                {
+                    w.DampLen = len;
+                    Array.Copy(w.CurDamp, w.BaseDamp, len);
+                    Array.Copy(w.CurDamp, w.LastDamp, len);
+                }
             }
 
             // lateral centre of the trailer's wheels
@@ -1177,10 +1440,14 @@ namespace TrailerStance
                 float f = w.BaseMaxForce * s.Spring.Value;
                 if (Mathf.Abs(f - w.LastMaxForce) > 0.01f) { w.SetSpring(f); w.LastMaxForce = f; }
 
-                if (w.BaseDamp != null)
+                if (w.DampLen > 0)
                 {
-                    var d = w.TargetDamp(s.Damper.Value, s.AntiBounce.Value, Rb.mass / n);
-                    if (!Same(d, w.LastDamp)) { w.SetDamp(d); w.LastDamp = d; }
+                    w.CalcTargetDamp(s.Damper.Value, s.AntiBounce.Value, Rb.mass / n);
+                    if (!Same(w.TargetDamp, w.LastDamp, w.DampLen))
+                    {
+                        w.SetDamp(w.TargetDamp);
+                        Array.Copy(w.TargetDamp, w.LastDamp, w.DampLen);
+                    }
                 }
             }
         }

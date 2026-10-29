@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.0
+Performance release; behaviour and settings are unchanged.
+- Trailer discovery looks only at the root objects of the loaded scenes, every 5 s and right after a scene loads, instead of every rigidbody in the world every 2 s.
+- Towing car: found through the hitch joint first, then with a 12 m physics overlap. Kept until the joint lets go or the car is more than 12 m away. No more world-wide `WheelController` searches.
+- No memory allocated per frame: damper values live in fixed buffers per wheel, wheel lists are reused, and the physics-step callback no longer creates a delegate every step.
+- Wheels, springs and dampers are applied at once when a setting changes, and checked for changes made by the game every 0.25 s instead of every frame.
+- New `[Debug] PerfLog` option (off by default): every 10 s writes the average and peak time of the mod per frame, physics step, scan and car search to `LogOutput.log`, with the trailer and wheel counts.
+
 ## 1.1.1
 - Plugin GUID and config file renamed to `com.gelatti.apocalypter.trailerstance` (`BepInEx\config\com.gelatti.apocalypter.trailerstance.cfg`). An existing `local.apocalypter.trailerstance.cfg` is moved to the new name on first start, so your settings are kept.
 
